@@ -1,0 +1,154 @@
+import CompanionKit
+import SwiftUI
+
+/// The whole app, in one screen that changes what it is showing.
+///
+/// There is no navigation stack because there is nowhere to navigate to: take a photo, look at it,
+/// send it, watch it develop. Anything that pushed a second screen would be a feature this app has
+/// decided not to have.
+struct StudioView: View {
+    @ObservedObject var model: PrintStudioModel
+    #if DEBUG
+    @State private var showsDiagnostics = false
+    #endif
+    @State private var showsLabelEditor = false
+    @State private var showsDebugLog = false
+    @State private var labelDraft = ""
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                LinkStatusBar(state: model.transportState, onReconnect: { model.connect() }) {
+                    labelDraft = Snap2InkPeer.userLabel()
+                    showsLabelEditor = true
+                }
+                    #if DEBUG
+                    // Tap the status bar for the capability readout. Documented in
+                    // MANUAL-DEVICE-TESTS.md, which asks the tester to record values that are
+                    // otherwise only visible over a serial cable.
+                    .onTapGesture { showsDiagnostics = true }
+                    #endif
+                    // Long-press for the debug log, in every build configuration — unlike the
+                    // capability readout above, this exists to diagnose bugs a TestFlight tester
+                    // hits in the field, where there is no debugger to fall back on.
+                    .onLongPressGesture { showsDebugLog = true }
+
+                switch model.stage {
+                case .viewfinder:
+                    ViewfinderView(model: model)
+                case .proofing:
+                    ProofView(model: model)
+                case .printing, .printed:
+                    DevelopingView(model: model)
+                }
+            }
+        }
+        .task {
+            await model.camera.start()
+            model.connect()
+        }
+        .alert(
+            "Snap2Ink",
+            isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            ),
+            presenting: model.errorMessage
+        ) { _ in
+            Button("OK", role: .cancel) { model.errorMessage = nil }
+        } message: { message in
+            Text(message)
+        }
+        // Distinguishes this install of Snap2Ink from another one paired to the same reader — e.g.
+        // two people sharing one reader — in the device's gallery picker. Only takes effect on the
+        // next launch: `Snap2InkPeer.identity()` is read once when the app starts (see
+        // `Snap2InkApp.makeTransport()`), and `CompanionClient` holds it for its whole lifetime.
+        .alert("Label This Phone", isPresented: $showsLabelEditor) {
+            TextField("e.g. Alex's iPhone", text: $labelDraft)
+            Button("Save") { Snap2InkPeer.setUserLabel(labelDraft) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Shown on the reader so two people pairing the same reader can tell their photos apart. Takes effect next time you open Snap2Ink.")
+        }
+        #if DEBUG
+        .sheet(isPresented: $showsDiagnostics) {
+            DiagnosticsView(model: model)
+        }
+        #endif
+        .sheet(isPresented: $showsDebugLog) {
+            DebugLogView()
+        }
+    }
+}
+
+/// One line at the top saying what the reader is doing. It earns the space because two of its
+/// states — "confirm on your reader" and "another app has the screen" — are things the user must
+/// act on somewhere other than this phone, and a spinner would tell them nothing.
+private struct LinkStatusBar: View {
+    let state: TransportState
+    let onReconnect: () -> Void
+    let onEditLabel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(tint)
+                .frame(width: 8, height: 8)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.75))
+            Spacer()
+            // A pairing label, not a settings screen — this app deliberately has nowhere else to put
+            // one. See `Snap2InkPeer.setUserLabel`.
+            Button(action: onEditLabel) {
+                Image(systemName: "person.crop.circle")
+                    .font(.footnote)
+            }
+            .foregroundStyle(.white.opacity(0.75))
+            if showsReconnect {
+                Button("Reconnect", action: onReconnect)
+                    .font(.footnote.weight(.medium))
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(.white.opacity(0.06))
+    }
+
+    private var message: String {
+        switch state {
+        case .idle: return "Not connected"
+        case .scanning: return "Looking for your reader…"
+        case .connecting: return "Connecting…"
+        case .awaitingPairingConfirmation: return "Confirm on your reader"
+        case .pairingRefused(.timeout): return "Pairing timed out"
+        case .pairingRefused: return "Pairing declined on the reader"
+        case .ready: return "Reader ready"
+        case .sending(let progress): return "Sending — \(Int(progress * 100))%"
+        case .developing: return "Developing on the reader"
+        case .backgrounded(.preempted): return "Another app has the screen"
+        case .backgrounded(.released): return "Screen released"
+        case .backgrounded: return "Link lost"
+        case .disconnected: return "Disconnected"
+        case .failed(let reason): return reason
+        }
+    }
+
+    private var tint: Color {
+        switch state {
+        case .ready, .sending, .developing: return .green
+        case .awaitingPairingConfirmation: return .yellow
+        case .pairingRefused, .failed, .disconnected, .backgrounded: return .red
+        case .idle, .scanning, .connecting: return .gray
+        }
+    }
+
+    private var showsReconnect: Bool {
+        switch state {
+        case .disconnected, .failed, .pairingRefused, .idle, .backgrounded: return true
+        default: return false
+        }
+    }
+}

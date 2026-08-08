@@ -1,0 +1,67 @@
+#!/bin/sh
+# pre-push guard for Snap2Ink (private, TestFlight-only distribution)
+#
+# Distribution is via ./deploy-testflight.sh, not git push. Any remote added
+# to this repo must be deliberately whitelisted below -- pushes to anything
+# else are refused outright.
+#
+# This guard exists because of the 2026-08-03 cross-repo push incident: private
+# SpokenFeeds history got pushed to the public xteink-companion-ble firmware
+# remote after an agent inside a submodule checkout reconfigured the
+# superproject's origin. Snap2Ink no longer vendors that submodule (it depends
+# on the versioned CompanionKit Swift package instead), but keeps the same
+# class of guard regardless -- it costs nothing and the failure mode (an agent
+# pushing this repo's history somewhere it shouldn't) is not submodule-specific.
+#
+# Bypass (use deliberately, never habitually):
+#   ALLOW_PUSH_ANYWAY=1 git push ...
+#
+# pre-push receives: $1=remote name $2=remote URL, and on stdin one line per
+# ref being pushed: <local ref> <local sha> <remote ref> <remote sha>
+#
+# Setup (one-time, per clone): git config core.hooksPath .githooks
+
+remote_name="$1"
+remote_url="$2"
+
+if [ -n "$ALLOW_PUSH_ANYWAY" ]; then
+    exit 0
+fi
+
+# Deliberately added remotes go here.
+#   2026-08-09: https://github.com/DarkStarDS9/Snap2Ink.git added as `origin`
+#   (private repo, for code review; distribution is still via ./deploy-testflight.sh)
+allowlist="https://github.com/DarkStarDS9/Snap2Ink.git"
+
+allowed=0
+for url in $allowlist; do
+    if [ "$remote_url" = "$url" ]; then
+        allowed=1
+        break
+    fi
+done
+
+if [ "$allowed" -ne 1 ]; then
+    echo "pre-push REFUSED: Snap2Ink is TestFlight-only by choice and has no allowed remote." >&2
+    echo "  attempted remote:" >&2
+    echo "    $remote_url" >&2
+    echo "  this repo's code exists on this disk alone; distribution is via ./deploy-testflight.sh, not git push." >&2
+    echo "  if a backup remote is ever deliberately added, put its URL in the 'allowlist' variable at the top of this file." >&2
+    echo "This guard exists because of the 2026-08-03 cross-repo push incident (private history from a sibling repo landed on a public firmware remote after an origin mix-up)." >&2
+    echo "If this push is genuinely deliberate: ALLOW_PUSH_ANYWAY=1 git push ..." >&2
+    exit 1
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/worktree-*)
+            echo "pre-push REFUSED: refusing to push worktree ref '$remote_ref'." >&2
+            echo "  worktree-* branches are throwaway journals, never deliverables -- land them on main by merge/cherry-pick instead." >&2
+            echo "This guard exists because of the 2026-08-03 cross-repo push incident." >&2
+            echo "If this push is genuinely deliberate: ALLOW_PUSH_ANYWAY=1 git push ..." >&2
+            exit 1
+            ;;
+    esac
+done
+
+exit 0
