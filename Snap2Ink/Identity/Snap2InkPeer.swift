@@ -56,7 +56,7 @@ enum Snap2InkPeer {
     /// `capabilities: .imageGallery` declares that Snap2Ink pushes a photo gallery the device can
     /// browse locally (protocol v8's on-device gallery picker) — without it, paired Snap2Ink installs
     /// don't show up as selectable tiles on the device's sleep-screen grid.
-    static let uiDeclaration = UiDeclaration(buttons: [
+    static let uiDeclaration = UiDeclaration(shape: .image, buttons: [
         ButtonMapEntry(.back, .remote, label: "Shutter"),
         ButtonMapEntry(.confirm, .none),
         ButtonMapEntry(.left, .none),
