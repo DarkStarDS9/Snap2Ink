@@ -53,8 +53,11 @@ mode for a missing app record, not a config bug).
 ## App Store Connect API key
 
 `deploy-testflight.sh` reads the key ID and issuer ID from the `SNAP2INK_ASC_KEY_ID` /
-`SNAP2INK_ASC_ISSUER_ID` environment variables (set once in your shell profile) and expects the
-key file at `~/.appstoreconnect/private_keys/AuthKey_<key id>.p8` (override with
+`SNAP2INK_ASC_ISSUER_ID` environment variables — set them in your shell profile, or in a gitignored
+`.env` beside the script (copy `.env.example`), which the script sources automatically if present.
+The `.env` route is what a non-interactive caller (a script, CI, or an agent's tool shell) needs,
+since those don't source `.zshrc`/`.bash_profile` the way an interactive terminal does. Either way
+it expects the key file at `~/.appstoreconnect/private_keys/AuthKey_<key id>.p8` (override with
 `SNAP2INK_ASC_KEY_PATH`) — never committed. `ExportOptions.plist` (also gitignored, copy from
 `ExportOptions.plist.example`) carries your team id and provisioning profile name.
 
