@@ -187,6 +187,11 @@ final class CompanionKitTransport: DisplayTransport {
         case .imageChunkAck:
             // Diagnostic progress marker only; pushImage's own progress callback already drives the UI.
             break
+
+        case .listStateAvailable:
+            // Only fires for a pending check-off diff on `listDoc`; Snap2Ink pushes no list content
+            // (image-only), so this can't occur in practice today.
+            break
         }
     }
 

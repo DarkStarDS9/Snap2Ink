@@ -46,8 +46,16 @@ enum Snap2InkPeer {
     ///   control (see `ViewfinderView`) and isn't bound to a device button at all.
     /// - `left`/`right` are `.none`. Their local paging routings act on buffered *body text*, and a
     ///   print has none; binding them would draw a page-turn hint over a photograph.
-    /// - `up`/`down` are `.none`. The remote shutter is the only functionality this app needs from
-    ///   the device's buttons.
+    /// - `up`/`down` are `.localGalleryPrevious`/`.localGalleryNext`, unflagged. Gallery navigation is
+    ///   app-declared, like the list screen's — leaving these `.none` would make the on-device gallery
+    ///   picker inert for Snap2Ink installs. They only run while the device is actually showing the
+    ///   local gallery (offline browse is its own boot mode, radio off), so there is no connected-state
+    ///   behavior to preserve and no flags are needed.
+    /// - `back` stays `.remote` while connected — that's the Shutter — but also carries `.localBack`
+    ///   with `[.alsoNotify, .localOnlyOffline]`: connected, it only notifies (Shutter, unchanged);
+    ///   offline and browsing, `.localOnlyOffline` runs the local action instead (leave the gallery
+    ///   back to the picker), and `.alsoNotify`'s notify side is moot with no peer connected to receive
+    ///   it. One binding, two lives, no button traded away.
     ///
     /// The side buttons' labels are stored but not currently drawn by the firmware (they have no
     /// hint position). They are set anyway: the labels are what a future firmware would draw, and a
@@ -57,12 +65,12 @@ enum Snap2InkPeer {
     /// browse locally (protocol v8's on-device gallery picker) — without it, paired Snap2Ink installs
     /// don't show up as selectable tiles on the device's sleep-screen grid.
     static let uiDeclaration = UiDeclaration(shape: .image, buttons: [
-        ButtonMapEntry(.back, .remote, label: "Shutter"),
+        ButtonMapEntry(.back, .localBack, label: "Shutter", flags: [.alsoNotify, .localOnlyOffline]),
         ButtonMapEntry(.confirm, .none),
         ButtonMapEntry(.left, .none),
         ButtonMapEntry(.right, .none),
-        ButtonMapEntry(.up, .none),
-        ButtonMapEntry(.down, .none),
+        ButtonMapEntry(.up, .localGalleryPrevious, label: ButtonLabels.up),
+        ButtonMapEntry(.down, .localGalleryNext, label: ButtonLabels.down),
     ], capabilities: .imageGallery)
 
     static func binding(for button: CompanionButton) -> ButtonMapEntry? {
