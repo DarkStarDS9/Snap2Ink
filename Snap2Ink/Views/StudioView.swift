@@ -8,22 +8,37 @@ import SwiftUI
 /// decided not to have.
 struct StudioView: View {
     @ObservedObject var model: PrintStudioModel
+    @StateObject private var restoreCoordinator: PhotoRestoreCoordinator
     #if DEBUG
     @State private var showsDiagnostics = false
     #endif
     @State private var showsLabelEditor = false
     @State private var showsDebugLog = false
+    @State private var showsPhotoSettings = false
+    @State private var showsBackupPrompt = false
     @State private var labelDraft = ""
+
+    init(model: PrintStudioModel) {
+        self.model = model
+        _restoreCoordinator = StateObject(wrappedValue: PhotoRestoreCoordinator(model: model))
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                LinkStatusBar(state: model.transportState, onReconnect: { model.connect() }) {
-                    labelDraft = Snap2InkPeer.userLabel()
-                    showsLabelEditor = true
-                }
+                LinkStatusBar(
+                    state: model.transportState,
+                    showsRestore: model.stage == .viewfinder && !restoreCoordinator.isRestoring,
+                    onReconnect: { model.connect() },
+                    onEditLabel: {
+                        labelDraft = Snap2InkPeer.userLabel()
+                        showsLabelEditor = true
+                    },
+                    onOpenPhotoSettings: { showsPhotoSettings = true },
+                    onRestore: { restoreCoordinator.present() }
+                )
                     #if DEBUG
                     // Tap the status bar for the capability readout. Documented in
                     // MANUAL-DEVICE-TESTS.md, which asks the tester to record values that are
@@ -48,6 +63,9 @@ struct StudioView: View {
         .task {
             await model.camera.start()
             model.connect()
+            if !PhotoBackupSettings.hasPrompted() {
+                showsBackupPrompt = true
+            }
         }
         .alert(
             "Snap2Ink",
@@ -72,6 +90,30 @@ struct StudioView: View {
         } message: {
             Text("Shown on the reader so two people pairing the same reader can tell their photos apart. Takes effect next time you open Snap2Ink.")
         }
+        .alert("Back Up Your Photos?", isPresented: $showsBackupPrompt) {
+            Button("Not Now") { PhotoBackupSettings.setHasPrompted() }
+            Button("Save Backups") {
+                Task {
+                    let granted = await PhotoBackupService.requestAddOnlyAuthorization()
+                    PhotoBackupSettings.setHasPrompted()
+                    if granted { PhotoBackupSettings.setEnabled(true) }
+                }
+            }
+        } message: {
+            Text("Snap2Ink can save the original photo behind every print to a Photos album, so you can resend it later looking exactly the same. You can change this anytime.")
+        }
+        .alert(
+            "Snap2Ink",
+            isPresented: Binding(
+                get: { restoreCoordinator.summaryMessage != nil },
+                set: { if !$0 { restoreCoordinator.summaryMessage = nil } }
+            ),
+            presenting: restoreCoordinator.summaryMessage
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
         #if DEBUG
         .sheet(isPresented: $showsDiagnostics) {
             DiagnosticsView(model: model)
@@ -79,6 +121,12 @@ struct StudioView: View {
         #endif
         .sheet(isPresented: $showsDebugLog) {
             DebugLogView()
+        }
+        .sheet(isPresented: $showsPhotoSettings) {
+            PhotoBackupSettingsView()
+        }
+        .sheet(isPresented: $restoreCoordinator.isPickerPresented) {
+            PhotoRestorePicker(onSelection: restoreCoordinator.handlePickerResults)
         }
     }
 }
@@ -88,8 +136,14 @@ struct StudioView: View {
 /// act on somewhere other than this phone, and a spinner would tell them nothing.
 private struct LinkStatusBar: View {
     let state: TransportState
+    /// Restoring drives the model through the same stages a live capture does — see
+    /// `PrintStudioModel.restoreAndSend` — so the entry point only makes sense from the viewfinder,
+    /// same as the shutter, and hides itself while a batch is already running.
+    let showsRestore: Bool
     let onReconnect: () -> Void
     let onEditLabel: () -> Void
+    let onOpenPhotoSettings: () -> Void
+    let onRestore: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -100,8 +154,18 @@ private struct LinkStatusBar: View {
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.75))
             Spacer()
-            // A pairing label, not a settings screen — this app deliberately has nowhere else to put
-            // one. See `Snap2InkPeer.setUserLabel`.
+            if showsRestore {
+                Button(action: onRestore) {
+                    Image(systemName: "photo.stack")
+                        .font(.footnote)
+                }
+                .foregroundStyle(.white.opacity(0.75))
+            }
+            Button(action: onOpenPhotoSettings) {
+                Image(systemName: "gearshape")
+                    .font(.footnote)
+            }
+            .foregroundStyle(.white.opacity(0.75))
             Button(action: onEditLabel) {
                 Image(systemName: "person.crop.circle")
                     .font(.footnote)

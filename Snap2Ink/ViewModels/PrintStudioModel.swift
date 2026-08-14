@@ -34,10 +34,16 @@ final class PrintStudioModel: ObservableObject {
     @Published var algorithm: DitherAlgorithm = DitherAlgorithm.lastUsed() {
         didSet {
             guard oldValue != algorithm else { return }
-            DitherAlgorithm.setLastUsed(algorithm)
+            if !suppressAlgorithmPersistence {
+                DitherAlgorithm.setLastUsed(algorithm)
+            }
             rerenderProof()
         }
     }
+    /// Set while `restoreAndSend` is driving `algorithm` through a batch of historical values, so
+    /// replaying an old print's algorithm doesn't overwrite the user's actual `lastUsed` preference
+    /// for their next fresh capture — see `resetAlgorithm(to:)`.
+    private var suppressAlgorithmPersistence = false
     @Published var style: PrintStyle = .framed {
         didSet { if oldValue != style { rerenderProof() } }
     }
@@ -156,6 +162,37 @@ final class PrintStudioModel: ObservableObject {
         stage = .viewfinder
     }
 
+    /// Sets `algorithm` without touching `DitherAlgorithm.lastUsed` — used by
+    /// `PhotoRestoreCoordinator` to put the user's real preference back once a restore batch is
+    /// done, without that reset itself being recorded as "the algorithm the user picked last".
+    func resetAlgorithm(to algorithm: DitherAlgorithm) {
+        suppressAlgorithmPersistence = true
+        self.algorithm = algorithm
+        suppressAlgorithmPersistence = false
+    }
+
+    // MARK: - Restoring from Photos
+
+    /// Loads a photo previously backed up by `PhotoBackupService` as the current capture and sends
+    /// it with the dither algorithm recorded at backup time, driving the same
+    /// capture → proof → send stages a live photo takes. Returns whether the send succeeded — see
+    /// `PhotoRestoreCoordinator`, which uses that to decide whether to continue a batch.
+    @discardableResult
+    func restoreAndSend(image: CGImage, algorithm: DitherAlgorithm) async -> Bool {
+        renderTask?.cancel()
+        sourceImage = image
+        manualRotationOverride = nil
+        suppressAlgorithmPersistence = true
+        self.algorithm = algorithm
+        suppressAlgorithmPersistence = false
+        stage = .proofing
+        rerenderProof()
+        await renderTask?.value
+
+        guard proof != nil else { return false }
+        return await sendAwaiting()
+    }
+
     // MARK: - Dithering
 
     /// Re-runs the pipeline against the stored capture. Cancels any render already in flight, so
@@ -248,10 +285,24 @@ final class PrintStudioModel: ObservableObject {
     }
 
     func send() {
-        guard let proof else { return }
+        guard beginSend() else { return }
+        Task { await performTransfer() }
+    }
+
+    /// The awaitable counterpart to `send()`, for `restoreAndSend` — which needs to know whether
+    /// the transfer actually landed before deciding to move on to the next photo in a batch.
+    private func sendAwaiting() async -> Bool {
+        guard beginSend() else { return false }
+        return await performTransfer()
+    }
+
+    /// The synchronous guards `send()` and `sendAwaiting()` share: is there a proof, is the reader
+    /// ready, does the proof match the panel. Leaves `stage == .printing` on success.
+    private func beginSend() -> Bool {
+        guard let proof else { return false }
         guard case .ready = transportState else {
             errorMessage = "Your reader isn't connected yet."
-            return
+            return false
         }
 
         // A print whose dimensions do not match the panel is scaled and resampled on-device, which
@@ -264,24 +315,70 @@ final class PrintStudioModel: ObservableObject {
         guard proof.image.width == panel.width, proof.image.height == panel.height else {
             rerenderProof()
             errorMessage = "Resizing the print for your reader — try again in a moment."
-            return
+            return false
         }
 
         DebugLog.shared.log("send() from stage \(stage)")
         stage = .printing
-        Task {
+        return true
+    }
+
+    /// The actual transfer, shared by `send()`'s fire-and-forget `Task` and `sendAwaiting()`.
+    /// Requires `beginSend()` to have already set `stage = .printing`. Returns whether it succeeded.
+    private func performTransfer() async -> Bool {
+        guard let proof else { return false }
+        var succeeded = false
+        do {
+            try await transport.send(proof)
+            stage = .printed
+            succeeded = true
+        } catch {
+            DebugLog.shared.log("send() threw: \(error)")
+            stage = .proofing
+            errorMessage = Self.describe(error)
+        }
+        if backgroundDisconnectPending {
+            backgroundDisconnectPending = false
+            transport.disconnect()
+        }
+        if succeeded, let sourceImage {
+            backupAfterSuccessfulSend(image: sourceImage, algorithm: proof.algorithm)
+        }
+        return succeeded
+    }
+
+    /// Best-effort automatic backup after a successful send — see `PhotoBackupSettings`. Off to the
+    /// side and fire-and-forget: a failed Photos save is not the user's problem right now, they just
+    /// watched a successful print land on their reader. Logged so a report of "my backups stopped"
+    /// is diagnosable from `DebugLogView` without a debugger attached.
+    private func backupAfterSuccessfulSend(image: CGImage, algorithm: DitherAlgorithm) {
+        guard PhotoBackupSettings.isEnabled() else { return }
+        Task.detached(priority: .utility) {
             do {
-                try await transport.send(proof)
-                stage = .printed
+                try await PhotoBackupService.save(image: image, algorithm: algorithm)
             } catch {
-                DebugLog.shared.log("send() threw: \(error)")
-                stage = .proofing
-                errorMessage = Self.describe(error)
+                DebugLog.shared.log("Photo backup failed: \(error)")
             }
-            if backgroundDisconnectPending {
-                backgroundDisconnectPending = false
-                transport.disconnect()
-            }
+        }
+    }
+
+    /// The explicit "Save to Library" action `ProofView` offers in place of "Send to reader" when
+    /// the reader can't be reached — `backupAfterSuccessfulSend` only ever fires after an actual
+    /// send, which can't happen with the reader offline or out of battery, and a photo the user
+    /// took specifically because it was worth keeping shouldn't be held hostage to the reader
+    /// coming back before the app gets backgrounded long enough to be killed.
+    ///
+    /// Unlike the automatic backup, failure is surfaced — here saving is the entire point of the
+    /// tap, not a courtesy alongside a print that already succeeded.
+    @discardableResult
+    func saveProofToLibrary() async -> Bool {
+        guard let proof, let sourceImage else { return false }
+        do {
+            try await PhotoBackupService.save(image: sourceImage, algorithm: proof.algorithm)
+            return true
+        } catch {
+            errorMessage = Self.describe(error)
+            return false
         }
     }
 
@@ -353,6 +450,10 @@ final class PrintStudioModel: ObservableObject {
             return "This print is \(bytes) bytes and the device accepts at most \(limit)."
         case TransportError.notReady:
             return "Your reader isn't connected yet."
+        case PhotoBackupService.BackupError.authorizationDenied:
+            return "Snap2Ink needs Photos permission to save this — turn it on in Settings ▸ Snap2Ink ▸ Photos."
+        case PhotoBackupService.BackupError.encodingFailed:
+            return "Couldn't prepare this photo to save."
         default:
             return error.localizedDescription
         }

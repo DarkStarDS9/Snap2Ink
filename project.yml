@@ -68,6 +68,8 @@ targets:
           - UIInterfaceOrientationPortrait
         NSCameraUsageDescription: "Snap2Ink uses the camera to take the photo it prints to your e-ink display."
         NSBluetoothAlwaysUsageDescription: "Snap2Ink connects to your XTEINK companion display to send it photos."
+        NSPhotoLibraryAddUsageDescription: "Snap2Ink can save a backup of the photos you print, so you can resend one later without retaking it."
+        NSPhotoLibraryUsageDescription: "Snap2Ink looks up your Snap2Ink backup album so it can add new photos to it."
         UIBackgroundModes:
           - bluetooth-central
 

@@ -6,6 +6,8 @@ import SwiftUI
 /// A print takes the better part of ten seconds and there is no undo, so it is worth a screen.
 struct ProofView: View {
     @ObservedObject var model: PrintStudioModel
+    @State private var isSavingToLibrary = false
+    @State private var savedToLibrary = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -70,13 +72,42 @@ struct ProofView: View {
                     .buttonStyle(.bordered)
                     .tint(.white)
 
-                Button("Send to reader") { model.send() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.proof == nil || !isReady)
+                sendOrSaveButton
             }
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 24)
+        // A new proof (retake, algorithm change) is a different photo than whatever "Saved" might
+        // be referring to.
+        .onChange(of: model.proof) { _, _ in savedToLibrary = false }
+    }
+
+    /// "Send to reader" when it's actually reachable. Otherwise, if backup is on, "Save to Library"
+    /// instead of a button sitting there disabled: the reader being offline or out of battery
+    /// shouldn't mean a photo worth keeping only exists in memory until the app gets backgrounded
+    /// long enough to be killed — see `PrintStudioModel.saveProofToLibrary`. With backup off, there
+    /// is nothing useful this button could do instead, so it stays disabled as before.
+    @ViewBuilder
+    private var sendOrSaveButton: some View {
+        if isReady {
+            Button("Send to reader") { model.send() }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.proof == nil)
+        } else if PhotoBackupSettings.isEnabled() {
+            Button(savedToLibrary ? "Saved" : "Save to Library") {
+                Task {
+                    isSavingToLibrary = true
+                    savedToLibrary = await model.saveProofToLibrary()
+                    isSavingToLibrary = false
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.proof == nil || isSavingToLibrary || savedToLibrary)
+        } else {
+            Button("Send to reader") { model.send() }
+                .buttonStyle(.borderedProminent)
+                .disabled(true)
+        }
     }
 
     /// A stand-in for a faster confirmation loop than another TestFlight build, kept around for
