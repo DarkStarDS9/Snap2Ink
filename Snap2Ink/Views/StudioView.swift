@@ -155,22 +155,10 @@ private struct LinkStatusBar: View {
                 .foregroundStyle(.white.opacity(0.75))
             Spacer()
             if showsRestore {
-                Button(action: onRestore) {
-                    Image(systemName: "photo.stack")
-                        .font(.footnote)
-                }
-                .foregroundStyle(.white.opacity(0.75))
+                iconButton("photo.stack", action: onRestore)
             }
-            Button(action: onOpenPhotoSettings) {
-                Image(systemName: "gearshape")
-                    .font(.footnote)
-            }
-            .foregroundStyle(.white.opacity(0.75))
-            Button(action: onEditLabel) {
-                Image(systemName: "person.crop.circle")
-                    .font(.footnote)
-            }
-            .foregroundStyle(.white.opacity(0.75))
+            iconButton("gearshape", action: onOpenPhotoSettings)
+            iconButton("person.crop.circle", action: onEditLabel)
             if showsReconnect {
                 Button("Reconnect", action: onReconnect)
                     .font(.footnote.weight(.medium))
@@ -179,6 +167,18 @@ private struct LinkStatusBar: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .background(.white.opacity(0.06))
+    }
+
+    /// HIG calls for a 44×44pt minimum tap target; the glyph itself stays footnote-sized so the bar
+    /// doesn't visually balloon, but the hit area around it is padded out to that minimum.
+    private func iconButton(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.footnote)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .foregroundStyle(.white.opacity(0.75))
     }
 
     private var message: String {
