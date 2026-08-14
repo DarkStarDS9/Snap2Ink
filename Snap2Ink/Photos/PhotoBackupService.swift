@@ -36,6 +36,19 @@ enum PhotoBackupService {
         return status == .authorized || status == .limited
     }
 
+    /// Requests full read/write access — what `AlbumPhotoPicker` needs to browse the configured
+    /// backup album directly, rather than the whole-library chrome `PHPickerViewController` used
+    /// to require. A separate, later ask from `requestAddOnlyAuthorization` above: a user who
+    /// never restores a backup never has to grant it.
+    static func requestReadAuthorization() async -> Bool {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        return status == .authorized || status == .limited
+    }
+
+    static func readAuthorizationStatus() -> PHAuthorizationStatus {
+        PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    }
+
     // MARK: - Save
 
     /// Encodes `image` as a JPEG carrying `algorithm` in its EXIF, and adds it to the library —
@@ -64,14 +77,27 @@ enum PhotoBackupService {
         }
     }
 
-    /// Add-only access only ever surfaces asset collections *this app created* — that's the whole
-    /// trade for not asking the user for full library access. It means an album a user made by hand
-    /// with the same name is invisible to us and gets shadowed by one Snap2Ink creates itself, but
-    /// it also means this fetch cannot see, and cannot leak, anything else in the user's library.
+    /// Under add-only access (the `save(image:algorithm:)` path above) this only ever surfaces
+    /// asset collections *this app created* — that's the whole trade for not asking for full
+    /// library access there. It means an album a user made by hand with the same name is invisible
+    /// to that path and gets shadowed by one Snap2Ink creates itself. Under full read access (the
+    /// `AlbumPhotoPicker` browsing path) the same fetch can see any album with a matching title.
     private static func findAlbum(named name: String) -> PHAssetCollection? {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "title = %@", name)
         return PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options).firstObject
+    }
+
+    // MARK: - Browsing
+
+    /// The assets in the configured backup album, for `AlbumPhotoPicker` to display — `nil` if the
+    /// album doesn't exist yet (e.g. before the first backup-into-an-album has happened). Requires
+    /// full read authorization; callers should check `readAuthorizationStatus()` first.
+    static func fetchBackupAlbumAssets(albumName: String) -> PHFetchResult<PHAsset>? {
+        guard let album = findAlbum(named: albumName) else { return nil }
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        return PHAsset.fetchAssets(in: album, options: options)
     }
 
     /// Not `private`: `PhotoBackupServiceTests` exercises the encode/decode round trip directly,

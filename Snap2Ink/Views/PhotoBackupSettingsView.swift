@@ -37,8 +37,8 @@ struct PhotoBackupSettingsView: View {
                         }
                     } footer: {
                         Text(usesAlbum
-                            ? "Photos are added to this album, which is created the first time it's needed."
-                            : "Photos are saved straight to your camera roll, with no album.")
+                            ? "Photos are added to this album, which is created the first time it's needed. Resending a photo browses this album directly — you'll be asked for a separate, one-time Photos permission the first time you do that."
+                            : "Photos are saved straight to your camera roll, with no album — turn this on if you want to resend backups later, since resending browses the album directly rather than your whole library.")
                     }
                 }
             }

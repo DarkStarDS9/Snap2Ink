@@ -100,7 +100,7 @@ struct StudioView: View {
                 }
             }
         } message: {
-            Text("Snap2Ink can save the original photo behind every print to a Photos album, so you can resend it later looking exactly the same. You can change this anytime.")
+            Text("Snap2Ink can save the original photo behind every print to a Photos album, so you can resend it later looking exactly the same. You can change this anytime. Resending will separately ask to browse that album, the first time you use it.")
         }
         .alert(
             "Snap2Ink",
@@ -126,7 +126,13 @@ struct StudioView: View {
             PhotoBackupSettingsView()
         }
         .sheet(isPresented: $restoreCoordinator.isPickerPresented) {
-            PhotoRestorePicker(onSelection: restoreCoordinator.handlePickerResults)
+            AlbumPhotoPicker(
+                onSelection: { assets in
+                    restoreCoordinator.isPickerPresented = false
+                    restoreCoordinator.handleSelection(assets)
+                },
+                onCancel: { restoreCoordinator.isPickerPresented = false }
+            )
         }
     }
 }

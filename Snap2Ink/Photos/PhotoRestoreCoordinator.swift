@@ -1,7 +1,6 @@
 import CoreGraphics
 import Foundation
-import PhotosUI
-import UniformTypeIdentifiers
+import Photos
 
 /// Drives "restore from Photos": the user picks photos previously backed up by
 /// `PhotoBackupService`, and each one that still carries its dither metadata is resent to the
@@ -24,12 +23,12 @@ final class PhotoRestoreCoordinator: ObservableObject {
         isPickerPresented = true
     }
 
-    func handlePickerResults(_ results: [PHPickerResult]) {
-        guard !results.isEmpty else { return }
-        Task { await restore(results) }
+    func handleSelection(_ assets: [PHAsset]) {
+        guard !assets.isEmpty else { return }
+        Task { await restore(assets) }
     }
 
-    private func restore(_ results: [PHPickerResult]) async {
+    private func restore(_ assets: [PHAsset]) async {
         isRestoring = true
         defer { isRestoring = false }
 
@@ -38,8 +37,8 @@ final class PhotoRestoreCoordinator: ObservableObject {
         var skipped = 0
         var stoppedEarly = false
 
-        for result in results {
-            guard let data = await Self.loadImageData(from: result.itemProvider),
+        for asset in assets {
+            guard let data = await Self.loadImageData(from: asset),
                   let algorithm = PhotoBackupService.algorithm(fromImageData: data),
                   let image = PhotoBackupService.image(fromImageData: data)
             else {
@@ -73,21 +72,17 @@ final class PhotoRestoreCoordinator: ObservableObject {
         summaryMessage = parts.isEmpty ? "Nothing to send." : parts.joined(separator: " ")
     }
 
-    /// Reads the file `provider` refers to and returns its raw bytes, which is what
-    /// `PhotoBackupService.algorithm(fromImageData:)` needs — a re-encoded/downsampled
-    /// representation (what `loadObject(ofClass: UIImage.self)` would hand back) can lose the EXIF
-    /// comment entirely.
-    private static func loadImageData(from provider: NSItemProvider) async -> Data? {
+    /// Reads `asset`'s original, unedited bytes — what `PhotoBackupService.algorithm(fromImageData:)`
+    /// needs, since a re-encoded/downsampled representation (what `requestImage` would hand back)
+    /// can lose the EXIF comment entirely. Snap2Ink's own backups are never edited, so "original"
+    /// here just means "the file as Photos stored it".
+    private static func loadImageData(from asset: PHAsset) async -> Data? {
         await withCheckedContinuation { continuation in
-            guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
-                continuation.resume(returning: nil)
-                return
-            }
-            provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, error in
-                guard let url, error == nil, let data = try? Data(contentsOf: url) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
+            let options = PHImageRequestOptions()
+            options.version = .original
+            options.isNetworkAccessAllowed = true
+            options.deliveryMode = .highQualityFormat
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
                 continuation.resume(returning: data)
             }
         }
